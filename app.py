@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import re
 from langchain_openai import ChatOpenAI
 
 # --- 1. 环境加固：解决中文乱码 ---
@@ -124,6 +125,28 @@ def load_data(file):
         return None
 
 
+def _clean_markdown(text: str) -> str:
+    """清理 LLM 输出的 Markdown，去除多余分隔线、装饰 emoji 与冗余空行。"""
+    if not text:
+        return text
+    # 去除仅由 --- / *** / ___ 构成的水平分隔线
+    text = re.sub(r'^\s*([-*_])\1{2,}\s*$', '', text, flags=re.MULTILINE)
+    # 去除标题与行首的装饰性 emoji（保留正文），风险等级改用文字标注
+    emoji_pattern = (
+        r'[\U0001F300-\U0001FAFF\U00002600-\U000027BF'
+        r'\U0001F600-\U0001F64F\U00002B00-\U00002BFF]'
+    )
+    text = re.sub(rf'^(\s*){emoji_pattern}\s*', r'\1', text, flags=re.MULTILINE)
+    # 去除行内装饰 emoji（标题尾部等）
+    text = re.sub(emoji_pattern, '', text)
+    # 去掉可能的 ```markdown 代码块包裹
+    text = re.sub(r'^```(?:markdown)?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*```\s*$', '', text)
+    # 合并 3 个及以上连续换行为 2 个
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 if uploaded_file:
     df = load_data(uploaded_file)
 
@@ -231,7 +254,14 @@ if uploaded_file:
                                 "你是一位资深的金融审计专家。请结合 df 的列名进行逻辑分析，"
                                 "确保财务计算准确。需要计算或绘图时调用 python_repl 工具执行代码，"
                                 "绘图后用 st.pyplot() 渲染并 plt.clf() 清空画布。"
-                                "分析完成后，用中文给出结构化的审计结论。"
+                                "分析完成后，用中文给出结构化的审计结论。\n\n"
+                                "排版规范（务必遵守）：\n"
+                                "1. 用 ## 作为一级标题、### 作为二级标题组织结构，标题前不要加 emoji 或装饰符号；\n"
+                                "2. 不要使用 --- 之类的水平分隔线；\n"
+                                "3. 表格类数据用 Markdown 表格呈现，金额右对齐；\n"
+                                "4. 风险项以「风险等级：高/中/低」文字标注，不要用 🔴🟡🟢 等颜色 emoji；\n"
+                                "5. 段落之间空一行即可，不要出现连续多个空行；\n"
+                                "6. 只输出正文，不要输出 ```markdown 代码块包裹。"
                             )),
                             HumanMessage(content=query),
                         ]
@@ -250,7 +280,7 @@ if uploaded_file:
                                 ))
 
                         final = messages[-1].content if messages[-1].content else "（分析完成，请查看上方图表）"
-                        st.chat_message("assistant").markdown(final)
+                        st.chat_message("assistant").markdown(_clean_markdown(final))
 
                     except Exception as e:
                         msg = str(e)
